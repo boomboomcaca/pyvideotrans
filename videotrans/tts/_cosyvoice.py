@@ -181,14 +181,12 @@ class CosyVoice(GradioBase):
             f"instruct={effective_instruct!r} seed={seed}"
         )
 
-        try:
-            return self._send(kwargs, data_item)
-        except ValueError as exc:
-            msg = str(exc)
-            # 典型错误：Value: 中文男 is not in the list of choices: ['']
-            if is_sft and 'list of choices' in msg:
-                raise StopRetry(tr(
-                    'CosyVoice webui rejected SFT voice "{}". The server reports no built-in SFT. '
-                    'Use a clone role or upgrade to a CosyVoice2-SFT model.'
-                ).format(role)) from exc
-            raise
+        # GradioBase._send 把 ValueError/TypeError 等捕获后返回字符串错误，
+        # 这里把跟 SFT 相关的 webui 拒绝信息翻译为更友好的提示。
+        result = self._send(kwargs, data_item)
+        if isinstance(result, str) and is_sft and 'list of choices' in result:
+            return tr(
+                'CosyVoice webui rejected SFT voice "{}". The server reports no built-in SFT. '
+                'Use a clone role or upgrade to a CosyVoice2-SFT model.'
+            ).format(role)
+        return result
