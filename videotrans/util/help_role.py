@@ -406,6 +406,27 @@ def get_f5tts_role():
     return rolelist
 
 
+def get_cosyvoice_rolelist():
+    """CosyVoice 角色列表：内置 SFT 音色 + 共享克隆参考音频。
+
+    SFT 音色来自 params['cosyvoice_sft_roles']（英文逗号分隔字符串），
+    例如 "中文男,中文女,英文男,英文女"。这些角色由 webui 端的预训练模型提供，
+    本地无需参考音频。克隆角色复用 get_f5tts_role() 的共享音频池。
+    """
+    rolelist = {"No": "No", "clone": "clone"}
+    raw = (params.get('cosyvoice_sft_roles', '') or '').replace('，', ',')
+    for name in raw.split(','):
+        name = name.strip()
+        if name and name not in rolelist:
+            # SFT 音色没有 ref_wav/ref_text，标记 sft=True 便于运行时识别
+            rolelist[name] = {"sft": True}
+    clone_roles = get_f5tts_role()
+    for k, v in clone_roles.items():
+        if k not in rolelist:
+            rolelist[k] = v
+    return rolelist
+
+
 # 获取clone-voice的角色列表
 def get_clone_role(set_p=False):
     from . import help_misc
@@ -473,8 +494,11 @@ def role_menu(tts_type, langcode=None) -> List:
     if tts_type == tts.QWEN3LOCAL_TTS:
         return list(get_qwenttslocal_rolelist().keys())
 
+    if tts_type == tts.COSYVOICE_TTS:
+        return list(get_cosyvoice_rolelist().keys())
+
     if tts_type in [tts.F5_TTS, tts.INDEX_TTS, tts.SPARK_TTS, tts.VOXCPM_TTS, tts.DIA_TTS, tts.OMNIVOICE_TTS,
-                    tts.COSYVOICE_TTS, tts.CHATTERBOX_TTS, tts.FISHTTS, tts.MOSS_TTS]:
+                    tts.CHATTERBOX_TTS, tts.FISHTTS, tts.MOSS_TTS]:
         return list(get_f5tts_role().keys())
     # 语言无关角色一致的到此结束
     # 以下均根据语言代码返回对应角色
