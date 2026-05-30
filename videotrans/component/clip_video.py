@@ -26,7 +26,7 @@ class Signals(QObject):
     load_error = Signal(str)
 
 class ClipTask(QRunnable):
-    def __init__(self, video_path, sub, line_num, subtitle_name, signals, mode,video_info=None):
+    def __init__(self, video_path, sub, line_num, subtitle_name, signals, mode,video_info=None, precise=False):
         super().__init__()
         self.video_path = video_path
         self.sub = sub
@@ -35,6 +35,8 @@ class ClipTask(QRunnable):
         self.signals = signals
         self.mode = mode
         self.video_info=video_info
+        # 合并模式下需精确切割：True 时用重新编码代替 -c copy
+        self.precise = precise
 
     def run(self):
         try:
@@ -46,54 +48,59 @@ class ClipTask(QRunnable):
             output_dir = f'{output_folder}/{self.subtitle_name}-clip'
             os.makedirs(output_dir, exist_ok=True)
 
+            # 合并(precise)模式：用重新编码可从任意时间点精确下刀，
+            # 避免 -c copy 回退到关键帧导致相邻片段内容重叠重复
+            if self.precise:
+                from videotrans.util.help_ffmpeg import get_video_codec
+                encoder = "libx264" if settings.get('force_lib') else get_video_codec(264)
+                if encoder == "h264_nvenc":
+                    vcodec = ["-c:v", "h264_nvenc", "-cq", "18", "-preset", "p4", "-pix_fmt", "yuv420p"]
+                elif encoder == "h264_qsv":
+                    vcodec = ["-c:v", "h264_qsv", "-global_quality", "18", "-preset", "medium", "-pix_fmt", "yuv420p"]
+                elif encoder == "h264_amf":
+                    vcodec = ["-c:v", "h264_amf", "-rc", "cqp", "-qp_p", "18", "-qp_i", "18", "-quality", "balanced", "-pix_fmt", "yuv420p"]
+                elif encoder == "h264_videotoolbox":
+                    vcodec = ["-c:v", "h264_videotoolbox", "-q:v", "75", "-pix_fmt", "yuv420p"]
+                elif encoder == "h264_vaapi":
+                    vcodec = ["-c:v", "h264_vaapi", "-qp", "18", "-preset", "medium", "-pix_fmt", "yuv420p"]
+                else:
+                    vcodec = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
+                acodec = ["-c:a", "aac", "-b:a", "192k"]
+            else:
+                vcodec = ["-c:v", "copy", "-crf", "18"]
+                acodec = ["-c:a", "copy"]
+
             if self.mode == 0:  # 默认
                 output_path = os.path.join(output_dir, f"{self.line_num}.mp4")
-                cmd = [
-                    "-y", "-ss", str(start_time), "-t", str(duration),
-                    "-i", self.video_path, ]
+                cmd = ["-y", "-ss", str(start_time), "-t", str(duration), "-i", self.video_path]
                 if self.video_info['streams_audio']>0:
-                    cmd+=["-c:v", "copy","-c:a", "copy"]
+                    cmd += vcodec + acodec
                 else:
-                    cmd+=['-an','-c:v','copy']
-
-                cmd+=[
-                    "-crf","18",output_path
-                ]
+                    cmd += ["-an"] + vcodec
+                cmd += [output_path]
                 tools.runffmpeg(cmd, force_cpu=True)
             elif self.mode == 1:  # 仅视频
                 output_path = os.path.join(output_dir, f"{self.line_num}.mp4")
-                cmd = [
-                    "-y", "-ss", str(start_time), "-t", str(duration),
-                    "-i", self.video_path, "-an", "-c:v", "copy","-crf","18",
-                    output_path
-                ]
+                cmd = ["-y", "-ss", str(start_time), "-t", str(duration),
+                       "-i", self.video_path, "-an"] + vcodec + [output_path]
                 tools.runffmpeg(cmd, force_cpu=True)
             elif self.mode == 2:  # 仅音频
                 output_path = os.path.join(output_dir, f"{self.line_num}.wav")
-                cmd = [
-                    "-y","-ss", str(start_time), "-t", str(duration),
-                    "-i", self.video_path, "-vn", "-c:a", "pcm_s16le",
-                    output_path
-                ]
+                cmd = ["-y", "-ss", str(start_time), "-t", str(duration),
+                       "-i", self.video_path, "-vn", "-c:a", "pcm_s16le", output_path]
                 tools.runffmpeg(cmd, force_cpu=True)
             elif self.mode == 3:  # 分离
                 # 无声视频
                 video_path_out = os.path.join(output_dir, f"{self.line_num}.mp4")
-                cmd_video = [
-                    "-y", "-ss", str(start_time), "-t", str(duration),
-                    "-i", self.video_path, "-an", "-c:v", "copy","-crf","18",
-                    video_path_out
-                ]
+                cmd_video = ["-y", "-ss", str(start_time), "-t", str(duration),
+                             "-i", self.video_path, "-an"] + vcodec + [video_path_out]
                 tools.runffmpeg(cmd_video, force_cpu=True)
 
                 # 音频
                 if self.video_info['streams_audio']>0:
                     audio_path_out = os.path.join(output_dir, f"{self.line_num}.wav")
-                    cmd_audio = [
-                        "-y", "-ss", str(start_time), "-t", str(duration),
-                        "-i", self.video_path, "-vn", "-c:a", "pcm_s16le",
-                        audio_path_out
-                    ]
+                    cmd_audio = ["-y", "-ss", str(start_time), "-t", str(duration),
+                                 "-i", self.video_path, "-vn", "-c:a", "pcm_s16le", audio_path_out]
                     tools.runffmpeg(cmd_audio, force_cpu=True)
 
             self.signals.progress.emit(f"Completed: {self.line_num}Line")
@@ -128,6 +135,12 @@ class ClipVideoWindow(QWidget):
         self.failed_clips = []
         self.open_button = None
         self.active_tasks = 0
+        # 合并相关状态
+        self.is_merge = False
+        self.clip_mode = 0
+        self.merge_started = False
+        self.merge_worker = None
+        self.merge_groups = []  # 合并模式下勾选行的连续分组
 
         self.setup_ui()
 
@@ -161,7 +174,14 @@ class ClipVideoWindow(QWidget):
             tr("optionSeparateAV")
         ])
         file_layout.addWidget(self.output_mode)
-        file_layout.addStretch() 
+
+        # 合并为一个文件
+        self.merge_checkbox = QCheckBox(tr("mergeIntoOne"))
+        self.merge_checkbox.setCursor(Qt.PointingHandCursor)
+        self.merge_checkbox.setToolTip(tr("mergeIntoOneTip"))
+        file_layout.addWidget(self.merge_checkbox)
+
+        file_layout.addStretch()
         layout.addLayout(file_layout)
 
 
@@ -298,6 +318,9 @@ class ClipVideoWindow(QWidget):
         self.completed_clips = 0
         self.failed_clips = []
         self.output_mode.setCurrentIndex(0)
+        self.merge_checkbox.setChecked(False)
+        self.is_merge = False
+        self.merge_started = False
         self.active_tasks = 0
         self.open_button.hide()
         self.select_all_btn.setVisible(False)
@@ -325,24 +348,46 @@ class ClipVideoWindow(QWidget):
             return
 
         mode = self.output_mode.currentIndex()
+        self.clip_mode = mode
+        self.is_merge = self.merge_checkbox.isChecked()
+        self.merge_started = False
+        # 合并模式：将勾选行按行号连续性分组，每个连续段合并成一整段(保留段内间隙)
+        self.merge_groups = self._group_consecutive(self.selected_lines) if self.is_merge else []
 
         self.is_clipping = True
         self.clip_btn.setText(tr("stopImmediately"))
-        self.total_clips = len(self.selected_lines)
+        # 合并模式进度按"连续段数"计，否则按勾选行数计
+        self.total_clips = len(self.merge_groups) if self.is_merge else len(self.selected_lines)
         self.completed_clips = 0
         self.failed_clips = []
         self.open_button.show()
         self.active_tasks = self.total_clips
-        self.progress_label.setPlainText(f"Total:{self.total_clips}")
+        if self.is_merge:
+            self.progress_label.setPlainText(tr('mergePlanInfo', len(self.selected_lines), self.total_clips))
+        else:
+            self.progress_label.setPlainText(f"Total:{self.total_clips}")
         task = Worker(parent=self,mode=mode)
         task.uito.connect(self.update_progress)
         task.start()
+
+    @staticmethod
+    def _group_consecutive(lines):
+        """将行号列表按连续性分组：[1,2,3,5,6,10] -> [[1,2,3],[5,6],[10]]。
+        每组会被合并为一段连续视频(保留组内字幕之间的间隙)。"""
+        groups = []
+        for n in sorted(lines):
+            if groups and n == groups[-1][-1] + 1:
+                groups[-1].append(n)
+            else:
+                groups.append([n])
+        return groups
 
 
 
     def stop_clipping(self):
         self.thread_pool.clear()
         self.is_clipping = False
+        self.merge_started = False
         self.clip_btn.setText(tr("startEditing"))
         self.progress_label.setPlainText(tr("statusStopped"))
         self.active_tasks = 0
@@ -360,11 +405,156 @@ class ClipVideoWindow(QWidget):
             f" {self.completed_clips}/{self.total_clips},  "
             f"Error: {len(self.failed_clips)}\n" + "\n".join(self.failed_clips)
         )
-        if self.active_tasks <= 0 and self.is_clipping:
-            self.signals.finished.emit()
+        if self.active_tasks <= 0 and self.is_clipping and not self.merge_started:
+            # 所有片段剪辑完成：若勾选合并且至少有一个成功片段，则启动合并
+            if self.is_merge and self.completed_clips > 0:
+                self.merge_started = True
+                self._start_merge()
+            else:
+                self.signals.finished.emit()
+
+    def _start_merge(self):
+        self.progress_label.appendPlainText(tr("mergingClips"))
+        self.merge_worker = MergeWorker(parent=self, mode=self.clip_mode)
+        self.merge_worker.uito.connect(self.on_merge_done)
+        self.merge_worker.start()
+
+    @Slot(str)
+    def on_merge_done(self, message):
+        if message.startswith("MergeFailed:"):
+            self.progress_label.appendPlainText(f"{tr('mergeFailed')}: {message[len('MergeFailed:'):]}")
+        else:
+            self.progress_label.appendPlainText(tr("mergeComplete"))
+        self.signals.finished.emit()
+
+    def _do_merge(self, mode):
+        """将已剪辑出的各连续段按顺序合并为单个文件。在后台线程中调用。"""
+        output_dir = f'{output_folder}/{self.subtitle_name}-clip'
+        # 每个连续勾选段输出为 {段序号}.mp4 / .wav，按序号顺序拼接
+        seg_ids = list(range(1, len(self.merge_groups) + 1))
+        outputs = []
+
+        def _cleanup(paths):
+            # 合并成功后删除中间片段，只保留合并文件
+            for p in paths:
+                try:
+                    if os.path.exists(p):
+                        os.remove(p)
+                except OSError:
+                    pass
+
+        def _concat_video(seg_names, out_name):
+            seg_paths = [os.path.join(output_dir, n) for n in seg_names]
+            concat_txt = os.path.join(output_dir, '_merge_video.txt')
+            tools.create_concat_txt(seg_paths, concat_txt=concat_txt)
+            out_path = os.path.join(output_dir, out_name)
+            cmd = ['-y', '-f', 'concat', '-safe', '0', '-i', concat_txt, '-c', 'copy', out_path]
+            tools.runffmpeg(cmd, force_cpu=True, cmd_dir=output_dir)
+            try:
+                os.remove(concat_txt)
+            except OSError:
+                pass
+            outputs.append(out_path)
+            _cleanup(seg_paths)
+
+        def _concat_audio(seg_names, out_name):
+            seg_paths = [os.path.join(output_dir, n) for n in seg_names]
+            concat_txt = os.path.join(output_dir, '_merge_audio.txt')
+            tools.create_concat_txt(seg_paths, concat_txt=concat_txt)
+            out_path = os.path.join(output_dir, out_name)
+            tools.concat_multi_audio(out=out_path, concat_txt=concat_txt)
+            try:
+                os.remove(concat_txt)
+            except OSError:
+                pass
+            outputs.append(out_path)
+            _cleanup(seg_paths)
+
+        if mode in (0, 1):  # 默认/仅视频 -> 合并为一个 mp4
+            _concat_video([f"{n}.mp4" for n in seg_ids], "_merged.mp4")
+        elif mode == 2:  # 仅音频 -> 合并为一个 wav
+            _concat_audio([f"{n}.wav" for n in seg_ids], "_merged.wav")
+        elif mode == 3:  # 声画分离 -> 合并出一个无声 mp4 + 一个 wav
+            _concat_video([f"{n}.mp4" for n in seg_ids], "_merged.mp4")
+            wavs = [f"{n}.wav" for n in seg_ids
+                    if os.path.exists(os.path.join(output_dir, f"{n}.wav"))]
+            if wavs:
+                _concat_audio(wavs, "_merged.wav")
+
+        # 生成并合并字幕文件
+        if self.subtitles and self.subtitle_path:
+            try:
+                from videotrans.task.taskcfg import SrtItem
+                from videotrans.util.help_srt import ms_to_time_string, get_srt_from_list
+                from videotrans.configure.config import logger
+
+                merged_subtitles = []
+                accumulated_time = 0
+                line_idx = 1
+
+                for group in self.merge_groups:
+                    first_sub = self.subtitles[group[0] - 1]
+                    last_sub = self.subtitles[group[-1] - 1]
+                    seg_start = first_sub['start_time']
+                    seg_end = last_sub['end_time']
+                    seg_duration = seg_end - seg_start
+
+                    for ln in group:
+                        original_sub = self.subtitles[ln - 1]
+                        rel_start = original_sub['start_time'] - seg_start
+                        rel_end = original_sub['end_time'] - seg_start
+
+                        new_start = accumulated_time + rel_start
+                        new_end = accumulated_time + rel_end
+
+                        new_sub = SrtItem(
+                            line=line_idx,
+                            start_time=new_start,
+                            end_time=new_end,
+                            text=original_sub['text']
+                        )
+                        new_sub['startraw'] = ms_to_time_string(ms=new_start)
+                        new_sub['endraw'] = ms_to_time_string(ms=new_end)
+                        new_sub['time'] = f"{new_sub['startraw']} --> {new_sub['endraw']}"
+
+                        merged_subtitles.append(new_sub)
+                        line_idx += 1
+
+                    accumulated_time += seg_duration
+
+                srt_path = os.path.join(output_dir, "_merged.srt")
+                srt_content = get_srt_from_list(merged_subtitles)
+                with open(srt_path, 'w', encoding='utf-8') as f:
+                    f.write(srt_content)
+                outputs.append(srt_path)
+
+                # 如果原字幕不是 .srt，利用 ffmpeg 转换格式
+                orig_suffix = Path(self.subtitle_path).suffix.lower()
+                if orig_suffix in ('.vtt', '.ass'):
+                    target_sub_path = os.path.join(output_dir, f"_merged{orig_suffix}")
+                    try:
+                        tools.runffmpeg(['-y', '-i', srt_path, target_sub_path], force_cpu=True)
+                        outputs.append(target_sub_path)
+                    except Exception as e:
+                        logger.warning(f"Failed to convert subtitle to {orig_suffix}: {e}")
+
+                # 删除中间临时产生的片段字幕文件
+                tmp_sub_paths = []
+                for seg_idx in seg_ids:
+                    tmp_sub_paths.append(os.path.join(output_dir, f"{seg_idx}.srt"))
+                    if orig_suffix in ('.vtt', '.ass'):
+                        tmp_sub_paths.append(os.path.join(output_dir, f"{seg_idx}{orig_suffix}"))
+                _cleanup(tmp_sub_paths)
+
+            except Exception as e:
+                from videotrans.configure.config import logger
+                logger.exception(f"Failed to generate merged subtitle: {e}")
+
+        return outputs
 
     def clipping_finished(self):
         self.is_clipping = False
+        self.merge_started = False
         self.clip_btn.setText(tr("startEditing"))
         self.active_tasks = 0
 
@@ -372,6 +562,54 @@ class ClipVideoWindow(QWidget):
     def open_output_folder(self):
         output_dir = f'{output_folder}/{self.subtitle_name}-clip'
         QDesktopServices.openUrl(QUrl.fromLocalFile(output_dir))
+
+    def _write_clip_subtitle(self, group, file_prefix):
+        """为某个片段写入对应的字幕文件。"""
+        from videotrans.task.taskcfg import SrtItem
+        from videotrans.util.help_srt import ms_to_time_string, get_srt_from_list
+        from videotrans.configure.config import logger
+        import os
+
+        output_dir = f'{output_folder}/{self.subtitle_name}-clip'
+        os.makedirs(output_dir, exist_ok=True)
+
+        first_sub = self.subtitles[group[0] - 1]
+        seg_start = first_sub['start_time']
+
+        clip_subs = []
+        for line_idx, ln in enumerate(group, start=1):
+            original_sub = self.subtitles[ln - 1]
+            new_start = original_sub['start_time'] - seg_start
+            new_end = original_sub['end_time'] - seg_start
+
+            new_sub = SrtItem(
+                line=line_idx,
+                start_time=new_start,
+                end_time=new_end,
+                text=original_sub['text']
+            )
+            new_sub['startraw'] = ms_to_time_string(ms=new_start)
+            new_sub['endraw'] = ms_to_time_string(ms=new_end)
+            new_sub['time'] = f"{new_sub['startraw']} --> {new_sub['endraw']}"
+            clip_subs.append(new_sub)
+
+        srt_path = os.path.join(output_dir, f"{file_prefix}.srt")
+        srt_content = get_srt_from_list(clip_subs)
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            f.write(srt_content)
+
+        # 如果原字幕不是 .srt，利用 ffmpeg 转换格式
+        orig_suffix = Path(self.subtitle_path).suffix.lower()
+        created_paths = [srt_path]
+        if orig_suffix in ('.vtt', '.ass'):
+            target_sub_path = os.path.join(output_dir, f"{file_prefix}{orig_suffix}")
+            try:
+                tools.runffmpeg(['-y', '-i', srt_path, target_sub_path], force_cpu=True)
+                created_paths.append(target_sub_path)
+            except Exception as e:
+                logger.warning(f"Failed to convert subtitle to {orig_suffix}: {e}")
+
+        return created_paths
 
 class Worker(QThread):
     uito = Signal(str)
@@ -389,10 +627,53 @@ class Worker(QThread):
             if video_info['streams_audio']==0 and self.mode == 2:
                 self.uito.emit(f"Error:{tr('errorNoAudioTrackForAudioOnly')}")
                 return
-            for line_num in self.parent.selected_lines:
-                sub = self.parent.subtitles[line_num - 1]
-                task = ClipTask(self.parent.video_path, sub, line_num, self.parent.subtitle_name, self.parent.signals, self.mode,video_info)
-                self.parent.thread_pool.start(task)
+            if self.parent.is_merge:
+                # 合并模式：每个连续勾选段切成一整段 [段首行.start, 段尾行.end]，保留段内间隙
+                for seg_idx, group in enumerate(self.parent.merge_groups, start=1):
+                    first = self.parent.subtitles[group[0] - 1]
+                    last = self.parent.subtitles[group[-1] - 1]
+                    seg_sub = {
+                        "startraw": first["startraw"],
+                        "start_time": first["start_time"],
+                        "end_time": last["end_time"],
+                    }
+                    task = ClipTask(self.parent.video_path, seg_sub, seg_idx, self.parent.subtitle_name, self.parent.signals, self.mode, video_info, precise=True)
+                    self.parent.thread_pool.start(task)
+                    try:
+                        self.parent._write_clip_subtitle(group, str(seg_idx))
+                    except Exception as e:
+                        from videotrans.configure.config import logger
+                        logger.warning(f"Failed to write clip subtitle: {e}")
+            else:
+                for line_num in self.parent.selected_lines:
+                    sub = self.parent.subtitles[line_num - 1]
+                    task = ClipTask(self.parent.video_path, sub, line_num, self.parent.subtitle_name, self.parent.signals, self.mode, video_info, precise=False)
+                    self.parent.thread_pool.start(task)
+                    try:
+                        self.parent._write_clip_subtitle([line_num], str(line_num))
+                    except Exception as e:
+                        from videotrans.configure.config import logger
+                        logger.warning(f"Failed to write clip subtitle: {e}")
 
         except Exception as e:
             self.uito.emit(f"Error:{e}")
+
+
+class MergeWorker(QThread):
+    uito = Signal(str)
+
+    def __init__(self, *,
+        parent:ClipVideoWindow,
+        mode=None):
+        super().__init__(parent=parent)
+        self.parent=parent
+        self.mode=mode
+
+    def run(self):
+        try:
+            # 等待线程池中可能仍在收尾的剪辑任务全部结束，确保片段文件已落盘
+            self.parent.thread_pool.waitForDone()
+            outputs = self.parent._do_merge(self.mode)
+            self.uito.emit(f"MergeCompleted:{len(outputs)}")
+        except Exception as e:
+            self.uito.emit(f"MergeFailed:{e}")
