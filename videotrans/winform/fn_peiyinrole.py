@@ -226,7 +226,7 @@ def openwin():
             "is_cuda": winobj.is_cuda.isChecked()
         }
 
-        trk = DubbingSrt(cfg=TaskCfgTTS(**cfg | video_obj), subs=winobj.subtitles, is_multi_role=True,
+        trk = DubbingSrt(cfg=TaskCfgTTS(**(video_obj | cfg)), subs=winobj.subtitles, is_multi_role=True,
                          out_ext=winobj.out_format.currentText())
         app_cfg.dubb_queue.put_nowait(trk)
         from videotrans.task.child_win_sign import SignThread

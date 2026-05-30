@@ -141,6 +141,7 @@ class ClipVideoWindow(QWidget):
         self.merge_started = False
         self.merge_worker = None
         self.merge_groups = []  # 合并模式下勾选行的连续分组
+        self.merge_keep = []    # 合并模式下需保留的时间区间[(start_ms,end_ms)]
 
         self.setup_ui()
 
@@ -351,20 +352,22 @@ class ClipVideoWindow(QWidget):
         self.clip_mode = mode
         self.is_merge = self.merge_checkbox.isChecked()
         self.merge_started = False
-        # 合并模式：将勾选行按行号连续性分组，每个连续段合并成一整段(保留段内间隙)
-        self.merge_groups = self._group_consecutive(self.selected_lines) if self.is_merge else []
+        # 合并模式：保留整段视频，仅挖掉没勾选的字幕行；保留区间需视频时长，放到 Worker 里算
+        self.merge_keep = []
 
         self.is_clipping = True
         self.clip_btn.setText(tr("stopImmediately"))
-        # 合并模式进度按"连续段数"计，否则按勾选行数计
-        self.total_clips = len(self.merge_groups) if self.is_merge else len(self.selected_lines)
         self.completed_clips = 0
         self.failed_clips = []
         self.open_button.show()
-        self.active_tasks = self.total_clips
         if self.is_merge:
-            self.progress_label.setPlainText(tr('mergePlanInfo', len(self.selected_lines), self.total_clips))
+            # 保留区间数由 Worker 算出后再更新计数
+            self.total_clips = 0
+            self.active_tasks = 0
+            self.progress_label.setPlainText(tr("mergingClips"))
         else:
+            self.total_clips = len(self.selected_lines)
+            self.active_tasks = self.total_clips
             self.progress_label.setPlainText(f"Total:{self.total_clips}")
         task = Worker(parent=self,mode=mode)
         task.uito.connect(self.update_progress)
@@ -381,6 +384,26 @@ class ClipVideoWindow(QWidget):
             else:
                 groups.append([n])
         return groups
+
+    def _compute_keep_ranges(self, total_ms):
+        """合并模式：保留每个勾选连续段 + 该段说完后的停顿(到下一行开始)；
+        没勾的行连同它后面的停顿一起挖掉。第一段并入片头，段尾若是最后一行则并入片尾。
+        返回保留的时间区间 [(start_ms, end_ms), ...]。"""
+        groups = self._group_consecutive(self.selected_lines)
+        keep = []
+        total_lines = len(self.subtitles)
+        for gi, group in enumerate(groups):
+            s = self.subtitles[group[0] - 1]['start_time']
+            last = group[-1]  # 段尾行号(1-based)
+            if last < total_lines:
+                # 段尾延伸到下一行(没勾行)的开始，保留本段说完后的停顿
+                e = self.subtitles[last]['start_time']
+            else:
+                e = total_ms    # 段尾是最后一行，并入片尾
+            if gi == 0:
+                s = 0           # 第一段并入片头
+            keep.append((s, e))
+        return keep
 
 
 
@@ -431,7 +454,7 @@ class ClipVideoWindow(QWidget):
         """将已剪辑出的各连续段按顺序合并为单个文件。在后台线程中调用。"""
         output_dir = f'{output_folder}/{self.subtitle_name}-clip'
         # 每个连续勾选段输出为 {段序号}.mp4 / .wav，按序号顺序拼接
-        seg_ids = list(range(1, len(self.merge_groups) + 1))
+        seg_ids = list(range(1, len(self.merge_keep) + 1))
         outputs = []
 
         def _cleanup(paths):
@@ -492,20 +515,14 @@ class ClipVideoWindow(QWidget):
                 accumulated_time = 0
                 line_idx = 1
 
-                for group in self.merge_groups:
-                    first_sub = self.subtitles[group[0] - 1]
-                    last_sub = self.subtitles[group[-1] - 1]
-                    seg_start = first_sub['start_time']
-                    seg_end = last_sub['end_time']
-                    seg_duration = seg_end - seg_start
-
-                    for ln in group:
+                for ks, ke in self.merge_keep:
+                    for ln in sorted(self.selected_lines):
                         original_sub = self.subtitles[ln - 1]
-                        rel_start = original_sub['start_time'] - seg_start
-                        rel_end = original_sub['end_time'] - seg_start
-
-                        new_start = accumulated_time + rel_start
-                        new_end = accumulated_time + rel_end
+                        # 只处理落在当前保留区间内的勾选行
+                        if not (ks <= original_sub['start_time'] < ke):
+                            continue
+                        new_start = accumulated_time + (original_sub['start_time'] - ks)
+                        new_end = accumulated_time + (original_sub['end_time'] - ks)
 
                         new_sub = SrtItem(
                             line=line_idx,
@@ -520,7 +537,7 @@ class ClipVideoWindow(QWidget):
                         merged_subtitles.append(new_sub)
                         line_idx += 1
 
-                    accumulated_time += seg_duration
+                    accumulated_time += (ke - ks)
 
                 srt_path = os.path.join(output_dir, "_merged.srt")
                 srt_content = get_srt_from_list(merged_subtitles)
@@ -628,22 +645,23 @@ class Worker(QThread):
                 self.uito.emit(f"Error:{tr('errorNoAudioTrackForAudioOnly')}")
                 return
             if self.parent.is_merge:
-                # 合并模式：每个连续勾选段切成一整段 [段首行.start, 段尾行.end]，保留段内间隙
-                for seg_idx, group in enumerate(self.parent.merge_groups, start=1):
-                    first = self.parent.subtitles[group[0] - 1]
-                    last = self.parent.subtitles[group[-1] - 1]
+                # 合并模式：保留整段视频，仅挖掉没勾选的字幕行；切出每个保留区间
+                from videotrans.util.help_srt import ms_to_time_string
+                keep = self.parent._compute_keep_ranges(video_info['time'])
+                self.parent.merge_keep = keep
+                self.parent.total_clips = len(keep)
+                self.parent.active_tasks = len(keep)
+                if not keep:
+                    self.uito.emit(f"Error:{tr('promptSelectAtLeastOneSubtitle')}")
+                    return
+                for seg_idx, (ks, ke) in enumerate(keep, start=1):
                     seg_sub = {
-                        "startraw": first["startraw"],
-                        "start_time": first["start_time"],
-                        "end_time": last["end_time"],
+                        "startraw": ms_to_time_string(ms=ks),
+                        "start_time": ks,
+                        "end_time": ke,
                     }
                     task = ClipTask(self.parent.video_path, seg_sub, seg_idx, self.parent.subtitle_name, self.parent.signals, self.mode, video_info, precise=True)
                     self.parent.thread_pool.start(task)
-                    try:
-                        self.parent._write_clip_subtitle(group, str(seg_idx))
-                    except Exception as e:
-                        from videotrans.configure.config import logger
-                        logger.warning(f"Failed to write clip subtitle: {e}")
             else:
                 for line_num in self.parent.selected_lines:
                     sub = self.parent.subtitles[line_num - 1]

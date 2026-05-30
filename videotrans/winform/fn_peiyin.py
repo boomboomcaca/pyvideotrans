@@ -377,7 +377,7 @@ def openwin():
                 "align_sub_audio": False,
                 "is_cuda": winobj.is_cuda.isChecked()
             }
-            trk = DubbingSrt(cfg=TaskCfgTTS(**cfg | it), out_ext=winobj.out_format.currentText())
+            trk = DubbingSrt(cfg=TaskCfgTTS(**(it | cfg)), out_ext=winobj.out_format.currentText())
             app_cfg.dubb_queue.put_nowait(trk)
             winobj.hecheng_plaintext.clear()
             winobj.hecheng_plaintext.insertPlainText(Path(it['name']).read_text(encoding='utf-8-sig',errors="ingore"))
