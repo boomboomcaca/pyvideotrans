@@ -253,7 +253,7 @@ class TestTaskCfgTTS:
         assert cfg.voice_role is None
         assert cfg.voice_autorate is False
         assert cfg.video_autorate is False
-        assert cfg.align_sub_audio is True
+        assert cfg.align_sub_audio is False
         assert cfg.remove_silent_mid is False
 
     def test_tts_custom(self):

@@ -145,7 +145,7 @@ class TaskCfgTTS(TaskCfgBase):
     voice_autorate: bool = False  # 是否音频自动加速
     video_autorate: bool = False  # 是否视频自动慢速
     remove_silent_mid: bool = False  # 是否移除字幕间的空隙
-    align_sub_audio: bool = True  # 是否强制对齐字幕和声音
+    align_sub_audio: bool = False  # 是否强制对齐字幕和声音
 
 
 # 字幕翻译

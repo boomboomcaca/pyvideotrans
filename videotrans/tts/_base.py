@@ -227,7 +227,7 @@ class BaseTTS(BaseCon):
     # 文本规范化和清理音量等参数
     def _cleantts(self) -> None:
         normalizer = None
-        if settings.get('normal_text'):
+        if settings.get('normal_text') and self.language:
             if self.language[:2] == 'zh':
                 from videotrans.util.cn_tn import TextNorm
                 normalizer = TextNorm(to_banjiao=True)
