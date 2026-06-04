@@ -319,6 +319,17 @@ def pygameaudio(filepath=None):
         import soundfile as sf
         import sounddevice as sd
         data, fs = sf.read(filepath)
+        channels = 1 if data.ndim == 1 else data.shape[1]
+        try:
+            device_info = sd.query_devices(kind='output')
+            max_channels = int(device_info.get('max_output_channels') or channels)
+        except Exception:
+            max_channels = channels
+
+        if channels == 1 and max_channels >= 2:
+            data = data.reshape(-1, 1).repeat(2, axis=1)
+        elif channels > max_channels > 0:
+            data = data[:, :max_channels]
         sd.play(data, fs)
         sd.wait()
     except Exception as e:
@@ -452,5 +463,29 @@ def check_new_version():
         res.raise_for_status()
         d = res.json()
         app_cfg.new_version_pvt = d['version']
-    except Exception as e:
-        logger.exception(f'获取最新版本信息失败{e}', exc_info=True)
+    except Exception:
+        #logger.exception(f'获取最新版本信息失败{e}', exc_info=True)
+        pass
+
+
+
+
+def _get_type_name(type_index, name_list):
+    if type_index is None or type_index >= len(name_list):
+        return '-'
+    return name_list[type_index]
+
+
+def get_recogn_type(type_index=None):
+    from videotrans.recognition import RECOGN_NAME_LIST
+    return _get_type_name(type_index, RECOGN_NAME_LIST)
+
+
+def get_tanslate_type(type_index=None):
+    from videotrans.translator import TRANSLASTE_NAME_LIST
+    return _get_type_name(type_index, TRANSLASTE_NAME_LIST)
+
+
+def get_tts_type(type_index=None):
+    from videotrans.tts import TTS_NAME_LIST
+    return _get_type_name(type_index, TTS_NAME_LIST)

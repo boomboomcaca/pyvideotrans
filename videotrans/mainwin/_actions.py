@@ -514,7 +514,7 @@ class WinAction(WinActionBase):
         cfg['clear_cache'] = False
 
         from videotrans.task.mult_video import MultVideo
-        task = MultVideo(parent=self.main, cfg=cfg, obj_list=self.obj_list)
+        task = MultVideo(parent=self.main, cfg=cfg, input_file_list=self.obj_list)
         task.start()
         self.main.startbtn.setDisabled(False)
         # 不再重试
@@ -734,6 +734,20 @@ class WinAction(WinActionBase):
 
             dialog = EditRecognResultDialog(
                 source_sub=app_cfg.onlyone_source_sub,
+                parent=self.main
+            )
+
+            if dialog.exec():
+                self.set_djs_timeout()
+            else:
+                self.update_status('stop')
+            return
+        if d['type'] == 'edit_recogn2_subtitle':
+            # 显示编辑翻译框
+            from videotrans.component.onlyone_set_recogn2 import EditRecognResultDialog2
+
+            dialog = EditRecognResultDialog2(
+                target_sub=app_cfg.onlyone_target_sub,
                 parent=self.main
             )
 

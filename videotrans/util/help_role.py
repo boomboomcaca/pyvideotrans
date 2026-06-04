@@ -13,104 +13,6 @@ from functools import lru_cache
 from videotrans.configure import contants
 
 
-def get_mosstts_service_urls(url: str | None):
-    if not url:
-        return {
-            'service_root': '',
-            'homepage_url': '',
-            'health_url': '',
-            'generate_url': '',
-        }
-
-    parsed = urlsplit(url)
-    path = (parsed.path or '').rstrip('/')
-    if path.endswith('/api/generate'):
-        service_path = path[:-len('/api/generate')]
-    elif path.endswith('/api'):
-        service_path = path[:-len('/api')]
-    else:
-        service_path = path
-
-    base = urlunsplit((parsed.scheme, parsed.netloc, service_path, '', '')).rstrip('/')
-    service_root = base or f'{parsed.scheme}://{parsed.netloc}'
-    return {
-        'service_root': service_root,
-        'homepage_url': service_root or f'{parsed.scheme}://{parsed.netloc}',
-        'health_url': f'{service_root}/health' if service_root else f'{parsed.scheme}://{parsed.netloc}/health',
-        'generate_url': f'{service_root}/api/generate' if service_root else f'{parsed.scheme}://{parsed.netloc}/api/generate',
-    }
-
-
-def _load_mosstts_cache():
-    cache_file = Path(f'{ROOT_DIR}/videotrans/voicejson/moss_tts.json')
-    if not cache_file.is_file():
-        return {}
-    try:
-        return json.loads(cache_file.read_text(encoding='utf-8-sig'))
-    except Exception as e:
-        logger.exception(f'加载 MOSS-TTS-Nano 角色缓存失败 {e}', exc_info=True)
-        return {}
-
-
-def _save_mosstts_cache(payload):
-    cache_file = Path(f'{ROOT_DIR}/videotrans/voicejson/moss_tts.json')
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
-    cache_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
-
-
-def get_mosstts_demo_map(force=False, raise_exception=False):
-    cached = _load_mosstts_cache()
-    if cached and not force:
-        return cached
-
-    service_urls = get_mosstts_service_urls(params.get('moss_tts_url', ''))
-    api_url = service_urls['homepage_url']
-    if not api_url:
-        if raise_exception:
-            raise Exception('Please configure the MOSS-TTS-Nano API address first.')
-        return cached
-
-    proxies = {"http": "", "https": ""} if ('127.0.0.1' in api_url or 'localhost' in api_url) else None
-    try:
-        response = requests.get(api_url, timeout=30, proxies=proxies)
-        response.raise_for_status()
-        matched = re.search(r'const\s+DEMOS\s*=\s*(\[.*?])\s*;\s*const\s+DEFAULT_DEMO_ID', response.text, re.S)
-        if not matched:
-            raise RuntimeError('Unable to parse DEMOS metadata from MOSS-TTS-Nano homepage')
-        demos = json.loads(matched.group(1))
-        result = {}
-        for item in demos:
-            role_name = str(item.get('name', '')).strip()
-            demo_id = str(item.get('id', '')).strip()
-            if not role_name or not demo_id:
-                continue
-            result[role_name] = {
-                "demo_id": demo_id,
-                "prompt_speech": str(item.get('prompt_speech', '')).strip(),
-                "text": str(item.get('text', '')).strip(),
-            }
-        if result:
-            _save_mosstts_cache(result)
-            return result
-    except Exception as e:
-        logger.exception(f'获取 MOSS-TTS-Nano demo 角色失败:{e}', exc_info=True)
-        if raise_exception:
-            raise
-    return cached
-
-
-def get_mosstts_role(force=False, raise_exception=False)->List[str]:
-    role_map = get_mosstts_demo_map(force=force, raise_exception=raise_exception)
-    role_list = ['No', 'clone']
-    local_role_map = get_f5tts_role()
-    if local_role_map:
-        role_list.extend(list(local_role_map.keys()))
-    if role_map:
-        role_list.extend(list(role_map.keys()))
-    role_list = [it for it in dict.fromkeys(role_list) if str(it).strip()]
-    params['moss_tts_role'] = role_list
-    return list(set(role_list))
-
 
 def get_camb_role(force=False, raise_exception=False):
     from . import help_misc
@@ -394,6 +296,12 @@ def get_gptsovits_role():
     return rolelist
 
 
+def get_chatterbox_role():
+
+    rolelist=get_f5tts_role()
+    rolelist["default"]='default'
+    return rolelist
+
 def get_f5tts_role():
     rolelist = {"No": "No", "clone": "clone"}
     if not params.get('f5tts_role', '').strip():
@@ -403,27 +311,6 @@ def get_f5tts_role():
         if len(tmp) != 2:
             continue
         rolelist[tmp[0]] = {"ref_wav": tmp[0], "ref_text": tmp[1]}
-    return rolelist
-
-
-def get_cosyvoice_rolelist():
-    """CosyVoice 角色列表：内置 SFT 音色 + 共享克隆参考音频。
-
-    SFT 音色来自 params['cosyvoice_sft_roles']（英文逗号分隔字符串），
-    例如 "中文男,中文女,英文男,英文女"。这些角色由 webui 端的预训练模型提供，
-    本地无需参考音频。克隆角色复用 get_f5tts_role() 的共享音频池。
-    """
-    rolelist = {"No": "No", "clone": "clone"}
-    raw = (params.get('cosyvoice_sft_roles', '') or '').replace('，', ',')
-    for name in raw.split(','):
-        name = name.strip()
-        if name and name not in rolelist:
-            # SFT 音色没有 ref_wav/ref_text，标记 sft=True 便于运行时识别
-            rolelist[name] = {"sft": True}
-    clone_roles = get_f5tts_role()
-    for k, v in clone_roles.items():
-        if k not in rolelist:
-            rolelist[k] = v
     return rolelist
 
 
@@ -448,8 +335,6 @@ def get_clone_role(set_p=False):
 # 根据渠道返回角色列表 供下拉菜单使用
 def role_menu(tts_type, langcode=None) -> List:
     from videotrans import tts
-    if tts_type == tts.GOOGLE_TTS:
-        return ['No', "gtts"]
 
     if tts_type == tts.OPENAI_TTS:
         return ['No'] + (params.get('openaitts_role') or contants.OPENAITTS_ROLES).split(',')
@@ -494,12 +379,12 @@ def role_menu(tts_type, langcode=None) -> List:
     if tts_type == tts.QWEN3LOCAL_TTS:
         return list(get_qwenttslocal_rolelist().keys())
 
-    if tts_type == tts.COSYVOICE_TTS:
-        return list(get_cosyvoice_rolelist().keys())
-
     if tts_type in [tts.F5_TTS, tts.INDEX_TTS, tts.SPARK_TTS, tts.VOXCPM_TTS, tts.DIA_TTS, tts.OMNIVOICE_TTS,
-                    tts.CHATTERBOX_TTS, tts.FISHTTS, tts.MOSS_TTS]:
+                    tts.COSYVOICE_TTS, tts.FISHTTS, tts.MOSS_TTS]:
         return list(get_f5tts_role().keys())
+
+    if tts_type == tts.CHATTERBOX_TTS:
+        return list(get_chatterbox_role().keys())
     # 语言无关角色一致的到此结束
     # 以下均根据语言代码返回对应角色
     if not langcode:

@@ -244,7 +244,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.actiondeepLX_address.triggered.connect(lambda: self.open_winform('deepLX'))
         self.actionott_address.triggered.connect(lambda: self.open_winform('ott'))
         self.actionclone_address.triggered.connect(lambda: self.open_winform('clone'))
-        self.actionmosstts.triggered.connect(lambda: self.open_winform('mosstts'))
         self.actionkokoro_address.triggered.connect(lambda: self.open_winform('kokoro'))
         self.actionchattts_address.triggered.connect(lambda: self.open_winform('chattts'))
         self.actiontts_api.triggered.connect(lambda: self.open_winform('ttsapi'))
@@ -341,6 +340,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         QApplication.processEvents()
         self.uito.emit('end')
+        run_in_threadpool(tools.is_connect_hf)
         run_in_threadpool(tools.check_new_version)
 
     def _start_workers(self, status):
@@ -515,3 +515,4 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         QThreadPool.globalInstance().waitForDone(5000)
         # 最后再kill ffmpeg，避免占用
         self.kill_ffmpeg_processes()
+

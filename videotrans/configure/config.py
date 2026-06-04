@@ -6,6 +6,8 @@ import os
 import re
 import sys
 import tempfile
+import time
+import random
 from functools import lru_cache
 from pathlib import Path
 from queue import Queue
@@ -31,9 +33,11 @@ SYS_TMP = Path(tempfile.gettempdir()).as_posix()
 ROOT_DIR = Path(sys.executable).parent.as_posix() if IS_FROZEN else Path(__file__).parent.parent.parent.as_posix()
 TEMP_ROOT = f'{ROOT_DIR}/tmp'
 LOGS_DIR = f'{ROOT_DIR}/logs'
-TEMP_DIR= f'{TEMP_ROOT}/_temp'
+# 会变化，应该通过 config.TEMP_DIR 获取
+TEMP_DIR= f'{TEMP_ROOT}/None'
 TRANSLATE_CACHE= f'{TEMP_ROOT}/translate_cache'
 
+Path(f"{ROOT_DIR}/models").mkdir(parents=True, exist_ok=True)
 Path(f"{ROOT_DIR}/logs").mkdir(parents=True, exist_ok=True)
 Path(f"{TRANSLATE_CACHE}").mkdir(parents=True, exist_ok=True)
 
@@ -48,7 +52,7 @@ def _set_env():
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
     os.environ["CT2_VERBOSE"] = "1"
     os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    #os.environ["TOKENIZERS_PARALLELISM"] = "false"
     os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
     os.environ['QT_API'] = 'pyside6'
     os.environ['SOFT_NAME'] = 'pyvideotrans'
@@ -125,6 +129,27 @@ def _get_transobj(lang):
         _transobj = None
     return _transobj
 
+
+
+
+def _write_with_retry(file_path, content, max_retries=2):
+    for attempt in range(max_retries):
+        try:
+            # 尝试写入文件
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return True # 写入成功，退出函数
+        except PermissionError as e: # Windows 下文件被占用通常报此错
+            if attempt == max_retries - 1:
+                logger.exception(f'写入文件失败:{file_path}\n{e}',exc_info=True)
+                return # 达到最大重试次数，抛出异常
+            # 随机等待一小段时间（退避算法），避免多个线程同时再次尝试
+            time.sleep(random.uniform(0.05, 0.2))
+        except Exception:
+            logger.exception(f'写入文件失败:{file_path}\n{e}',exc_info=True)
+            return
+            
+
 @dataclass
 class AppCfg:
     """
@@ -138,6 +163,8 @@ class AppCfg:
     # 存放消息日志
     global_msg: List = field(default_factory=list)
     exit_soft: bool = False
+    # 用于经 webui 交互确定的默认音色克隆方式，与webui语言界面相关
+    indextts_default_choice:str='Same as the voice reference'
 
     # 窗口与UI
     child_forms: Dict = field(default_factory=dict)
@@ -321,7 +348,7 @@ class AppSettings:
             "video_codec": 264,
             "out_video_ext":".mp4",# [.mp4,.mkv]
             "noise_separate_nums": 4,
-            "aitrans_temperature": 0.2,
+            "aitrans_temperature": 1.0,
             "aitrans_context": False,
             "batch_nums": 0,# 0=并发，1=串行翻译,>1 每批同时多少个
             "ai302_models": Ai302_Models,
@@ -445,8 +472,7 @@ class AppSettings:
 
     def _save_to_disk(self):
         try:
-            with open(self._json_path, 'w', encoding='utf-8') as f:
-                f.write(json.dumps(self.to_dict(), ensure_ascii=False))
+            _write_with_retry(self._json_path,json.dumps(self.to_dict(), ensure_ascii=False))
         except Exception as e:
             logger.exception(f'保存settings到本地失败：{e}',exc_info=True)
 
@@ -593,7 +619,7 @@ class AppParams:
             "target_dir": "",
             "source_language": "en",
             "target_language": "zh-cn",
-            "subtitle_language": "chi",
+
             "translate_type": 0,
             "subtitle_type": 1,
             "tts_type": 0,
@@ -613,15 +639,11 @@ class AppParams:
             "deeplx_key": "",
             "libre_address": "",
             "libre_key": "",
-            "ott_address": "",
+
             "tencent_SecretId": "",
             "tencent_SecretKey": "",
             "tencent_termlist": "",
-            "gcloud_credential_json": "",
-            "gcloud_language_code": "",
-            "gcloud_voice_name": "",
-            "gcloud_audio_encoding": "",
-            "gcloud_ssml_gender": "",
+
             "ali_id": "",
             "ali_key": "",
             "baidu_appid": "",
@@ -630,9 +652,7 @@ class AppParams:
             "chatgpt_key": "",
             "chatgpt_max_token": 8192,
             "chatgpt_model": str(settings.get('chatgpt_model', '-')).strip().split(',')[0],
-            "claude_api": "",
-            "claude_key": "",
-            "claude_model": str(settings.get('claude_model', '-')).strip().split(',')[0],
+
             "azure_api": "",
             "azure_key": "",
             "azure_version": "2025-04-01-preview",
@@ -665,8 +685,6 @@ class AppParams:
             "qwenmt_domains": "",
             "qwenmt_model": "qwen-mt-turbo",
             "qwenmt_asr_model": "qwen3-asr-flash",
-            "qwenttslocal_refaudio": "nverguo.wav#你说四大皆空，却为何，紧闭双眼，若你睁开眼睛看看我，我不相信你，两眼空空。",
-            "qwenttslocal_url": "",
             "qwenttslocal_prompt": "",
             "ai302_key": "",
             "ai302_model": "",
@@ -674,8 +692,6 @@ class AppParams:
             "whipserx_api": "",
             "trans_api_url": "",
             "trans_secret": "",
-            "coquitts_role": "",
-            "coquitts_key": "",
             "elevenlabstts_role": [],
             "elevenlabstts_key": "",
             "elevenlabstts_models": ELEVENLABS_TTS_MODELS.split(',')[0],
@@ -704,16 +720,11 @@ class AppParams:
             "parakeet_address": "",
             "clone_api": "",
             "clone_voicelist": ["clone"],
-            "moss_tts_url": "",
-            "moss_tts_role": ["No", "clone"],
-            "moss_tts_local_role": "",
-            "moss_tts_preset_test_text": "",
             "zh_recogn_api": "",
             "recognapi_url": "",
             "recognapi_key": "",
             "stt_url": "",
             "stt_model": "large-v3-turbo",
-            "sense_url": "",
             "ttsapi_url": "",
             "ttsapi_voice_role": "",
             "ttsapi_extra": "pyvideotrans",
@@ -734,8 +745,6 @@ class AppParams:
             "ai302tts_role": OPENAITTS_ROLES,
             "azure_speech_region": "",
             "azure_speech_key": "",
-            "chatterbox_url": "",
-            "chatterbox_role": "nverguo.wav#你说四大皆空，却为何，紧闭双眼，若你睁开眼睛看看我，我不相信你，两眼空空。",
             "chatterbox_cfg_weight": 0.5,
             "chatterbox_exaggeration": 0.5,
             "gptsovits_url": "",
@@ -743,14 +752,8 @@ class AppParams:
             "gptsovits_isv2": True,
             "gptsovits_extra": "pyvideotrans",
             "cosyvoice_url": "",
-            "cosyvoice_role": "nverguo.wav#你说四大皆空，却为何，紧闭双眼，若你睁开眼睛看看我，我不相信你，两眼空空。",
-            "cosyvoice_instruct_text": "",
-            "cosyvoice_sft_roles": "",
-            "cosyvoice_seed": 0,
             "omnivoice_url": "",
-            "omnivoice_role": "nverguo.wav#你说四大皆空，却为何，紧闭双眼，若你睁开眼睛看看我，我不相信你，两眼空空。",
             "fishtts_url": "",
-            "fishtts_role": "nverguo.wav#你说四大皆空，却为何，紧闭双眼，若你睁开眼睛看看我，我不相信你，两眼空空。",
             "f5tts_url": "",
             "f5tts_model": "",
             "f5tts_ttstype": "F5-TTS",
@@ -802,8 +805,7 @@ class AppParams:
 
     def _save_to_disk(self):
         try:
-            with open(self._json_path, 'w', encoding='utf-8') as f:
-                f.write(json.dumps(self.to_dict(), ensure_ascii=False))
+            _write_with_retry(self._json_path,json.dumps(self.to_dict(), ensure_ascii=False))
         except Exception as e:
             logger.exception(f'保存 params 到本地失败：{e}',exc_info=True)
     # 兼容 params['key']

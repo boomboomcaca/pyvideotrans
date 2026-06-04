@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import List, Dict, Union
 
 from videotrans import translator
-from videotrans.configure.config import ROOT_DIR, tr, app_cfg, settings, TEMP_DIR, logger
+from videotrans.configure.config import ROOT_DIR, tr, app_cfg, settings, logger
+from videotrans.configure import config
 from videotrans.recognition import run as run_recogn, is_allow_lang as recogn_allow_lang, FASTER_WHISPER
 from videotrans.translator import run as run_trans, get_audio_code
 from videotrans.tts import run as run_tts, EDGE_TTS, AZURE_TTS, SUPPORT_CLONE
@@ -59,12 +60,13 @@ class TransCreate(BaseTask):
     queue_tts: List = field(default_factory=list, repr=False)
     clone_ref: str = ""
     cost_duration:float=0.0
+    should_recogn2:bool=False
 
     def __post_init__(self):
         super().__post_init__()
         self.cost_duration=time.time()
         if not self.cfg.cache_folder:
-            self.cfg.cache_folder = f"{TEMP_DIR}/{self.uuid}"
+            self.cfg.cache_folder = f"{config.TEMP_DIR}/{self.uuid}"
         # 清理缓存
         if self.cfg.clear_cache:
             if self.cfg.target_dir and Path(self.cfg.target_dir).is_dir():
@@ -143,6 +145,9 @@ class TransCreate(BaseTask):
             self.cfg.enable_diariz = False
             self.should_dubbing = False
 
+        # 是否需要二次识别
+        # 选中二次识别 and 有配音 and 非嵌入双字幕 and 有翻译即原始和目标语言非同一个
+        self.should_recogn2 = self.cfg.recogn2pass and self.should_dubbing and self.cfg.subtitle_type<3 and (self.cfg.source_language_code != self.cfg.target_language_code)
         # 记录最终使用的配置信息
         logger.debug(f"[TransCreate]最终配置信息：{self=}\n{self.cfg=}")
         # 禁止修改字幕
@@ -242,7 +247,7 @@ class TransCreate(BaseTask):
 
         if audio_stream_len > 0 and not tools.vail_file(self.cfg.source_wav) and tools.vail_file(self.cfg.vocal):
             # 如果存在人声文件(可能仅仅分离成功人声，或者单独将其他工具分离出的人声放入目标文件夹)，则使用该文件作为语音识别文件
-            self.clone_ref = self.cfg.vocal
+            
             cmd = [
                 "-y",
                 "-i",
@@ -264,7 +269,9 @@ class TransCreate(BaseTask):
         # 如果还不存在原音频 self.cfg.source_wav,说明失败，强制从原视频中提取 
         if audio_stream_len > 0 and not tools.vail_file(self.cfg.source_wav):
             self._split_audio_byraw()
-
+        # 将分离后人声设为语音克隆参考音频
+        if self.cfg.vocal and Path(self.cfg.vocal).exists():
+            self.clone_ref = self.cfg.vocal
         self.signal(text=tr('endfenliyinpin'))
         logger.debug(f'[预处理阶段结束耗时]:{time.time()-_st}s')
 
@@ -285,7 +292,7 @@ class TransCreate(BaseTask):
         if not tools.vail_file(self.cfg.source_wav):
             raise SpeechToTextError(tr("Failed to separate audio, please check the log or retry"))
 
-        # 进行降噪
+        # 进行降噪，结果为 16k采样
         if self.cfg.remove_noise:
             _remove_noise_wav = f"{self.cfg.cache_folder}/remove_noise.wav"
             if tools.vail_file(_remove_noise_wav):
@@ -299,15 +306,14 @@ class TransCreate(BaseTask):
                                         callback=self._process_callback)
                 from videotrans.process.prepare_audio import remove_noise
                 kw = {
-                    "input_file": self.cfg.source_wav,
+                    "input_file": self.cfg.source_wav if not Path(self.cfg.vocal).exists() else self.cfg.vocal,
                     "output_file": _remove_noise_wav,
                     "is_cuda": self.cfg.is_cuda
                 }
                 try:
                     _rs = self._new_process(callback=remove_noise, title=title, is_cuda=self.cfg.is_cuda, kwargs=kw)
                     if _rs:
-                        self.cfg.source_wav = _remove_noise_wav
-                        self.clone_ref = _remove_noise_wav
+                        self.clone_ref = self.cfg.source_wav = _remove_noise_wav
                     self.signal(text='remove noise end')
                 except Exception as e:
                     logger.exception(f'降噪失败，跳过 {e}', exc_info=True)
@@ -317,7 +323,7 @@ class TransCreate(BaseTask):
             recogn_type=self.cfg.recogn_type,
             uuid=self.uuid,
             model_name=self.cfg.model_name,
-            audio_file=self.cfg.source_wav,
+            audio_file=self.cfg.source_wav,# 必选 16000 采样
             detect_language=self.cfg.detect_language,
             cache_folder=self.cfg.cache_folder,
             is_cuda=self.cfg.is_cuda,
@@ -412,13 +418,9 @@ class TransCreate(BaseTask):
     # 配音后再次对配音文件进行识别，以便生成简短的字幕，
     def recogn2pass(self) -> None:
         _st=time.time()
-        if not self.should_dubbing or not self.cfg.recogn2pass or self._exit():
+        if not self.should_recogn2 or self._exit():
+            logger.debug(f'跳过二次识别')
             return
-        # 如果不嵌入字幕，或嵌入双字幕，则跳过
-        if self.cfg.subtitle_type > 2 and (self.cfg.source_language_code != self.cfg.target_language_code):
-            logger.debug(f'跳过二次识别, 因设置了嵌入双字幕，二次识别后双字幕时间戳将无法保持一致，因此跳过：{self.cfg.subtitle_type=}')
-            return
-
         if not tools.vail_file(self.cfg.target_wav):
             logger.debug(f'跳过二次识别，因无配音音频文件')
             return
@@ -862,6 +864,7 @@ class TransCreate(BaseTask):
                 tools.runffmpeg(cmd)
                 shutil.copy2(self.cfg.vocal, f'{self.cfg.target_dir}/vocal.wav')
                 shutil.copy2(self.cfg.instrument, f'{self.cfg.target_dir}/instrument.wav')
+                
         except Exception as e:
             logger.exception(f'人声背景声分离失败，静默跳过 {e}', exc_info=True)
 
@@ -947,9 +950,33 @@ class TransCreate(BaseTask):
 
     # 多线程实现裁剪参考音频
     def _create_ref_from_vocal(self):
-        # 背景分离人声如果失败则直接使用原始音频
-        vocal = self.cfg.source_wav if not self.clone_ref or not Path(self.clone_ref).exists() else self.clone_ref
-
+        # 保底原始音频用于克隆时参考音频
+        vocal = self.cfg.source_wav
+        if self.clone_ref and Path(self.clone_ref).exists():
+            # 人声背景声分离 出来的人声音频，44.1k，如果有降噪，则为 16000 
+            vocal=self.clone_ref
+        else:
+            # 无则从原始视频中提取44.1k音频作为参考音频
+            try:
+                tmpfile = self.cfg.cache_folder + "/clone_ref_44100.wav"
+                tools.runffmpeg([
+                    "-y",
+                    "-i",
+                    self.cfg.name,
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "44100",
+                    "-c:a",
+                    "pcm_s16le",
+                    tmpfile
+                ])
+                vocal=tmpfile
+            except Exception as e:
+                logger.exception(f'克隆语音前分离出 44.1k 的原始音频失败',exc_info=True)
+            
+        logger.debug(f'语音克隆模式下，所用参考音频为:{vocal}')
         # 裁切对应片段为参考音频
         def _cutaudio_from_vocal(it):
             try:
@@ -1057,9 +1084,8 @@ class TransCreate(BaseTask):
     # 处理所需字幕
     def _process_subtitles(self) -> Union[tuple[str, str], None]:
         logger.debug(f"\n======准备要嵌入的字幕:{self.cfg.subtitle_type=}=====")
-        if not Path(self.cfg.target_sub).exists():
-            logger.error(tr("No valid subtitle file exists"))
-            return
+        if not Path(self.cfg.target_sub).exists() :
+            raise VideoTransError(tr("No valid subtitle file exists")+self.cfg.target_sub)
 
         # 如果原始语言和目标语言相同，或不存原始语言字幕，则强制单字幕
         if not Path(self.cfg.source_sub).exists() or (self.cfg.source_language_code == self.cfg.target_language_code):
@@ -1169,16 +1195,16 @@ class TransCreate(BaseTask):
         # 判断 novoice_mp4 是否完成
         tools.is_novoice_mp4(self.cfg.novoice_mp4, self.uuid)
         if not Path(self.cfg.novoice_mp4).exists():
-            raise RuntimeError(f'{self.cfg.novoice_mp4} 不存在')
+            raise VideoTransError(f'{self.cfg.novoice_mp4} 不存在')
 
         # 需要配音但没有配音文件
         if self.should_dubbing and not tools.vail_file(self.cfg.target_wav):
-            raise RuntimeError(f"{tr('Dubbing')}{tr('anerror')}:{self.cfg.target_wav}")
+            raise VideoTransError(f"{tr('Dubbing')}{tr('anerror')}:{self.cfg.target_wav}")
 
         self.precent = min(max(90, self.precent), 98)
 
         # 最终需嵌入视频的音频，可能是配音后文件，也可能是原始音频(未配音)
-        target_m4a = self.cfg.cache_folder + "/origin_audio.m4a"
+        target_m4a = self.cfg.cache_folder + "/will_embed.m4a"
         # 用于判断输出原始音频是否结束，is True是结束，
         output_source_output = True
         if not self.should_dubbing:
@@ -1379,12 +1405,11 @@ class TransCreate(BaseTask):
                         logger.exception(f'硬件处理视频合成失败，回退软编 {e}', exc_info=True)
                         tools.runffmpeg(cmd0 + cmd1 + subtitle_filter + cmd2 + enc_qua + cmd3,
                                         cmd_dir=self.cfg.cache_folder, force_cpu=True)
-                # 复制ass硬字幕到目标文件夹下
-                shutil.copy2(f'{self.cfg.cache_folder}/{subtitles_file}', f'{self.cfg.target_dir}/{subtitles_file}')
         except Exception as e:
             raise VideoTransError(tr('Error in embedding the final step of the subtitle dubbing')+str(e)) from e
         finally:
             os.chdir(ROOT_DIR)
+
         # 复制到目标文件夹
         if Path(tmp_target_mp4).exists():
             try:

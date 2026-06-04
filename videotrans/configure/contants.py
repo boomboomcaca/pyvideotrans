@@ -127,9 +127,9 @@ DEEPGRAM_MODEL = [
 ]
 
 # 支持的视频格式
-VIDEO_EXTS = ["mp4", "mkv", "mpeg", "avi", "mov", "mts", "webm", "ogg", "ts", "flv"]
+VIDEO_EXTS = ["mp4", "mkv", "mpeg", "avi", "mov", "mts", "webm", "ogg", "ts", "flv","wmv"]
 # 支持的音频格式
-AUDIO_EXITS = ["mp3", "wav", "aac", "flac", "m4a","ogg"]
+AUDIO_EXITS = ["mp3", "wav", "aac", "flac", "m4a","ogg","wma"]
 
 ChatTTS_VOICE="11,12,16,2222,4444,6653,7869,9999,5,13,14,1111,3333,4099,5099,5555,8888,6666,7777"
 # openai-tts音色
@@ -165,7 +165,7 @@ Zijiehuoshan_Model="doubao-seed-2-0-pro-260215,doubao-seed-2-0-lite-260215,douba
 Whisper_Models="tiny,tiny.en,base,base.en,small,small.en,medium,medium.en,large-v3-turbo,large-v1,large-v2,large-v3,distil-large-v3,distil-large-v3.5"
 Openai_Whisper_Models="tiny,tiny.en,base,base.en,small,small.en,medium,medium.en,large-v3-turbo,large-v1,large-v2,large-v3"
 
-MINIMAX_MODELS="MiniMax-M2.7,MiniMax-M2.7-highspeed,MiniMax-M2.5,MiniMax-M2.5-highspeed"
+MINIMAX_MODELS="MiniMax-M3,MiniMax-M2.7,MiniMax-M2.7-highspeed"
 MINIMAX_TTS_MODELS="speech-2.8-hd,speech-2.8-turbo,speech-2.6-hd,speech-2.6-turbo,speech-02-hd,speech-02-turbo"
 
 

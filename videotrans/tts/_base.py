@@ -10,7 +10,8 @@ from typing import List, Dict, Any, Optional, Union, Tuple
 from tenacity import RetryError
 from videotrans.configure.base import BaseCon
 from videotrans.configure.excepts import DubbingSrtError, StopTask
-from videotrans.configure.config import tr, settings, logger, ROOT_DIR, TEMP_DIR
+from videotrans.configure.config import tr, settings, logger, ROOT_DIR
+from videotrans.configure import config
 from videotrans.util import tools
 
 """
@@ -60,7 +61,7 @@ class BaseTTS(BaseCon):
 
     def __post_init__(self):
         super().__post_init__()
-        Path(f'{TEMP_DIR}/{self.uuid}').mkdir(parents=True, exist_ok=True)
+        Path(f'{config.TEMP_DIR}/{self.uuid}').mkdir(parents=True, exist_ok=True)
         self.queue_tts = copy.deepcopy(self.queue_tts)
         self.len = len(self.queue_tts)
         self._cleantts()
@@ -72,6 +73,7 @@ class BaseTTS(BaseCon):
         logger.debug(f'开始语音合成:渠道{self.tts_type}')
         self.signal(text=f"TTS starting: [{self.len}]")
         if hasattr(self, '_download'):
+            self.signal(text=f"Check and downloading models...")
             self._download()
         loop = None
         try:
@@ -138,7 +140,7 @@ class BaseTTS(BaseCon):
                 succeed_nums += 1
         # 只有全部配音都失败，才视为失败
         if succeed_nums < 1:
-            if self._exec(): return
+            if self._exit(): return
             if isinstance(self.error, Exception):
                 raise self.error.last_attempt.exception() if isinstance(self.error, RetryError) else self.error
 
@@ -209,7 +211,7 @@ class BaseTTS(BaseCon):
             return
         # 有些不可恢复的错误，例如 404 sk错误 无权访问等，直接发送 error 信号，无需继续多线程
         try:
-            self.signal(text=f'Dubbing {idx}')
+            self.signal(text=f'Dubbing {idx}/{self.len}')
             return self._run(data_item)
         except RetryError as e:
             logger.exception(f'配音失败:\n字幕内容:{data_item}\n{e}', exc_info=True)
@@ -285,6 +287,8 @@ class BaseTTS(BaseCon):
             ref_wav = item.get('ref_wav', '')
             ref_text = item.get('ref_text').strip()
         elif role in self.roledict:
+            if not isinstance(self.roledict[role],dict):
+                return ref_wav,ref_text
             ref_text = self.roledict[role]['ref_text']
             ref_wav = ROOT_DIR + f"/f5-tts/{role}"
 

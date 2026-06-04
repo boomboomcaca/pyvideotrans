@@ -129,11 +129,10 @@ def openai_whisper(
             if jianfan and raws:
                 for it in raws:
                     it['text'] = zhconv.convert(it['text'], 'zh-hans')
+        return raws, None
     except BaseException as e:
         msg = traceback.format_exc()
         return False, f'{e}:{msg}'
-    else:
-        return raws, None
 
 
 def faster_whisper(
@@ -318,11 +317,12 @@ def faster_whisper(
             if jianfan and raws:
                 for it in raws:
                     it['text'] = zhconv.convert(it['text'], 'zh-hans')
+            logger.debug('返回识别结果')
+        return raws,None
     except BaseException as e:
         msg = traceback.format_exc()
         return False, f'{e}:{msg}'
-    else:
-        return raws, None
+
 
 
 def pipe_asr(
@@ -520,7 +520,11 @@ def qwen3asr_fun(
         device_index=0  # gpu索引
 ) -> Tuple[Union[List[SrtItem], bool], Union[str, None]]:
     import torch
-    from qwen_asr import Qwen3ASRModel
+    try:
+        from qwen_asr import Qwen3ASRModel
+    except ImportError as e:
+        logger.critical('please run  uv sync --extra qwenasr ')
+        return False, f'{e}'
     if is_cuda:
         device_map = f'cuda:{device_index}'
         dtype = torch.float16
@@ -534,7 +538,6 @@ def qwen3asr_fun(
             f"{ROOT_DIR}/models/models--Qwen--Qwen3-ASR-{model_name}",
             dtype=dtype,
             device_map=device_map,
-            attn_implementation=None,
             max_inference_batch_size=8,
             # Batch size limit for inference. -1 means unlimited. Smaller values can help avoid OOM.
             max_new_tokens=2048,  # Maximum number of tokens to generate. Set a larger value for long audio input.

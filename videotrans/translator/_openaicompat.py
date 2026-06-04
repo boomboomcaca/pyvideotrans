@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-import logging
+import logging,json
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Union
-from openai import OpenAI, NotFoundError, AuthenticationError, PermissionDeniedError
+from openai import OpenAI, NotFoundError, AuthenticationError, PermissionDeniedError,BadRequestError
 from tenacity import before_log, retry_if_not_exception_type, wait_fixed, stop_after_attempt, after_log, retry
 
 from videotrans.configure.excepts import NO_RETRY_EXCEPT, TranslateSrtError, LLMSegmentError, StopTask
@@ -23,14 +23,14 @@ class OpenAICampat(BaseTrans):
     prompt: str = field(init=False)
     api_key: str = field(init=False)
     api_url: str = field(init=False)
-    temperature:float=0.0
+    temperature:float=1.0
     max_tokens:int=8192
     reasoning_effort:str=None
     extra_body:Union[dict,None]=None
 
     def __post_init__(self):
         super().__post_init__()
-        self.temperature=float(settings.get('aitrans_temperature', 0.2))
+        self.temperature=float(settings.get('aitrans_temperature', 1.0))
         self.prompt = tools.get_prompt(ainame=self.ainame,aisendsrt=self.aisendsrt).replace('{lang}',self.target_language_name)
 
     @retry(retry=retry_if_not_exception_type(NO_RETRY_EXCEPT), stop=(stop_after_attempt(settings.get('retry_nums'))), wait=wait_fixed(2), before=before_log(logger, logging.INFO),after=after_log(logger, logging.INFO))
@@ -55,34 +55,37 @@ class OpenAICampat(BaseTrans):
         kwargs={
             "model":self.model_name,
             "messages":message,
-            "frequency_penalty":0,
             "timeout":300,
             # 针对 openai 官方或 GPT模型，使用 max_completion_tokens参数，其他第三方使用 max_tokens 参数
             "max_completion_tokens":int(self.max_tokens),
-            "max_tokens":int(self.max_tokens),
-            "temperature":float(self.temperature),
-            "reasoning_effort":self.reasoning_effort,
-            "extra_body":self.extra_body
+            #"max_tokens":int(self.max_tokens),
+            "temperature":float(self.temperature)            
         }
+        if self.reasoning_effort:
+            kwargs["reasoning_effort"]=self.reasoning_effort
+            
+        # openai 推理模型不可传递 max_tokens
+        #if re.match(r'^gpt|o\d',self.model_name.lower(),flags=re.I):
+        #    del kwargs['max_tokens']
 
+        logger.debug(f'字幕翻译:[{self.ainame=},{self.model_name=},{self.api_url=},{self.reasoning_effort=}]')
         try:
             model = OpenAI(api_key=self.api_key, base_url=self.api_url)
-            response = model.chat.completions.create(**kwargs)
-        except (NotFoundError,AuthenticationError,PermissionDeniedError) as e:
-            raise StopTask(e.message) from e
+            response = model.chat.completions.create(**kwargs, extra_body=self.extra_body)
+        except (NotFoundError,AuthenticationError,PermissionDeniedError,BadRequestError) as e:
+            del kwargs['messages']
+            raise StopTask(e.message+f'\n{kwargs}') from e
 
-        logger.debug(f'字幕翻译:[{self.ainame},{self.model_name},{self.api_url}]')
         result = ""
         if not hasattr(response,'choices') or not response.choices:
             raise TranslateSrtError(str(response))
         if response.choices[0].finish_reason=='length':
             raise LengthFinishReasonError(completion=response)
-        if response.choices[0].message.content:
-            result = response.choices[0].message.content.strip()
-        else:
+        if not response.choices[0].message.content:
             logger.warning(f'[{self.ainame}]请求失败:{response=}')
             raise TranslateSrtError(f"[{self.ainame}] {response.choices[0].finish_reason}:{response}")
-
+        result = response.choices[0].message.content.strip()
+        #logger.debug(response)
         match = re.search(r'<TRANSLATE_TEXT>(.*?)</TRANSLATE_TEXT>', re.sub(r'<think>(.*?)</think>', '',result), re.S)
         if match:
             return match.group(1)
@@ -95,7 +98,8 @@ class OpenAICampat(BaseTrans):
         prompts_template = prompts_template.replace('{max_speech_s}', str(settings.get('max_speech_duration_s', 6)))
         chunk_size = int(settings.get('llm_chunk_size', 20))
         model_name=params.get(f'{self.ainame}_model')
-        max_tokens=max(65536,int(  float(params.get(f'{self.ainame}_max_token', 40960)) ))
+        max_tokens=max(65536,int(float(params.get(f'{self.ainame}_max_token', 40960)) ))
+        temperature=float(settings.get('aitrans_temperature', 1.0))
         api_key=params.get(f'{self.ainame}_key')
         api_url=params.get('chatgpt_api') if self.ainame!='deepseek' else 'https://api.deepseek.com/v1/'
         if len(api_url)<10:
@@ -112,13 +116,20 @@ class OpenAICampat(BaseTrans):
                 }
             ]
             model = OpenAI(api_key=api_key, base_url=api_url)
+            kwargs={
+                    "model":model_name,
+                    "max_completion_tokens":max_tokens,
+                    "messages":message,
+                    "temperature":temperature,
+                    "timeout":300,  # 超过5分钟为失败           
+            }
+            if self.ainame=='deepseek':
+                kwargs["reasoning_effort"]='high'
+
+            # 其他渠道无法确定所用模型是否支持推理
             response = model.chat.completions.create(
-                model=model_name,
-                frequency_penalty=0,
-                max_completion_tokens=max_tokens,
-                messages=message,
-                temperature=0.2,
-                timeout=300  # 超过5分钟为失败
+                    **kwargs,
+                    extra_body={"thinking": {"type": "enabled"}} if self.ainame=='deepseek' else None
             )
             if not hasattr(response, 'choices') or not response.choices:
                 logger.warning(f'[{self.ainame}]重新断句失败:{response=}')
@@ -131,13 +142,13 @@ class OpenAICampat(BaseTrans):
                 raise LLMSegmentError(f"{response}")
 
             result = response.choices[0].message.content
-            match = re.search(r'<SRT>(.*?)</SRT>', re.sub(r'<think>(.*?)</think>', '', result, flags=re.I | re.S),
-                              re.S | re.I)
+            #logger.debug(response)
+            match = re.search(r'<SRT>(.*?)</SRT>', re.sub(r'<think>(.*?)</think>', '', result, flags=re.I | re.S), re.S | re.I)
             if match:
                 return match.group(1)
             return result.strip()
 
-        logger.debug(f'LLM重新断句:{self.ainame},{model_name},{api_url}')
+        logger.debug(f'LLM重新断句:{self.ainame=},{model_name=},{api_url=}')
         new_sublist = []
         for idx in range(0, len(srt_list), chunk_size):
             self.signal(text=f'[{idx}] {self.ainame} ' + tr("Re-segmenting..."))

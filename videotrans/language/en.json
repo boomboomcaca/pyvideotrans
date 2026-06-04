@@ -24,7 +24,7 @@
     "Solution to model download failure": "Model Download Fix",
     "Alibaba Machine Translation": "Ali Machine Trans",
     "Alibaba Translation": "Alibaba Trans",
-    "Alignment control": "Alignment Control",
+    "Alignment control": "Synchronizing",
     "Api url": "API URL",
     "Apply": "Apply",
     "Arabic": "Arabic",
@@ -138,7 +138,7 @@
     "Dubbing channel": "Dubb Channel",
     "Dubbing failed": "Dubbing Failed",
     "Dubbing from subtitles": "Dubbing from Subs...",
-    "Dubbing role": "Voice Role",
+    "Dubbing role": "Select Voice",
     "Dubbing speed": "Dubbing Rate",
     "Dubbing succeeded {}，failed {}": "Success: {}, Failed: {}",
     "Duration of each segment/second": "Seg Duration (Batch Mode)",
@@ -995,6 +995,7 @@
   "Creating progress bar, please wait": "Creating progress bar, please wait...",
   "Translation results saved to:": "Translation results saved to: ",
   "Romanian": "Romanian",
-  "may not support": " may not support "
+  "may not support": " may not support ",
+  "Modify secondary recognition results": "Modify secondary recognition results"
 
 }

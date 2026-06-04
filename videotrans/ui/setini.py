@@ -57,7 +57,7 @@ notices = {
         "speaker_type": "用于说话人分离的模型，默认内置模型支持中英. \n若选 pyannote 必须拥有 https://huggingface.co 上的token，\n并且同意pyannote组织的授权协议\n\n具体请访问URL查看教程:\nhttps://pvt9.com/shuohuaren",
         "hf_token": "填写你在 huggingface.co 的token，否则无法使用 pyannote，具体查看教程\nhttps://pvt9.com/shuohuaren",
 
-        "cuda_com_type": "faster模式时cuda数据类型，int8=消耗资源少，速度快，精度低，float32=消耗资源多，速度慢，精度高，float16适合GPU加速。default默认自选",
+        "cuda_com_type": "faster模式时计算数据类型，int8=消耗资源少，速度快，精度低，float32=消耗资源多，速度慢，精度高，float16适合GPU加速。default默认自选",
         "beam_size": "字幕识别时精度调整，1-5，1=消耗显存最低，5=消耗显存最多",
         "best_of": "字幕识别时精度调整，1-5，1=消耗显存最低，5=消耗显存最多",
         "condition_on_previous_text": "若开启将占用更多GPU，效果也更好，但也容易出现重复或幻觉",
@@ -82,7 +82,7 @@ notices = {
         "aitrans_context": "AI翻译渠道一次性翻译字幕所有行，翻译质量最佳\n【务必注意】1. 必须使用支持超长上下文的先进模型(在线AI旗舰模型)\n2. 需要将对应AI渠道设置界面中的max token设为较大值，否则长篇输出可能被截断而报错\n3. 可能反馈较慢，表现为迟迟未返回数据",
         "translation_wait": "每次翻译后暂停秒数,用于限制请求频率",
         "aisendsrt": "是否在使用AI翻译渠道时发送完整字幕格式内容",
-        "aitrans_temperature": "AI翻译模型温度值，默认0.2",
+        "aitrans_temperature": "AI翻译模型温度值，默认1.0",
     },
     "dubbing": {
         "dubbing_thread": "同时配音的线程数",
@@ -220,7 +220,7 @@ titles = {
     "countdown_sec": "单视频交互翻译暂停倒计时",
     "backaudio_volume": "背景音量变化倍数",
     "loop_backaudio": "循环播放背景音",
-    "cuda_com_type": "CUDA数据类型",
+    "cuda_com_type": "计算数据类型",
     "beam_size": "识别准确度beam_size",
     "best_of": "识别准确度best_of",
     "condition_on_previous_text": "启用上下文感知",
@@ -321,7 +321,7 @@ if defaulelang != 'zh':
             "speaker_type": "The model used for speaker separation. The default is the built-in model, supporting both Chinese and English. Pyannote is optional. \nIf selected, you must have a token from \nhttps://huggingface.co \nand agree to the Pyannote licensing agreement. \nFor details, please visit the URL for a tutorial: \nhttps://pvt9.com/shuohuaren",
             "hf_token": "Enter your token from huggingface.co. Otherwise, you cannot use Pyannote speaker separation. \nFor details, please see the tutorial: \nhttps://pvt9.com/shuohuaren",
 
-            "cuda_com_type": "CUDA compute type for faster-whisper (e.g., int8, float16, float32).",
+            "cuda_com_type": "Compute type for faster-whisper (e.g., int8, float16, float32).",
             "beam_size": "Beam size for transcription (1-5). Higher is more accurate but uses more VRAM.",
             "best_of": "Best-of for transcription (1-5). Higher is more accurate but uses more VRAM.",
             "condition_on_previous_text": "Condition on previous text for better context (uses more GPU, may cause repetition).",
@@ -342,7 +342,7 @@ if defaulelang != 'zh':
             "aitrans_thread": "Number of subtitle lines per request for AI translation.",
             "translation_wait": "Delay (in seconds) between translation requests to prevent rate-limiting.",
             "aisendsrt": "Send full SRT format content when using AI translation.",
-            "aitrans_temperature": "AI models temperature,default is 0.2",
+            "aitrans_temperature": "AI models temperature,default is 1.0",
             "aitrans_context": "AI translation channel translates all lines of subtitles in one go, providing the best translation quality. \n[Important Note] \n1. Must use an advanced model that supports extremely long context (online AI flagship model). \n2. Feedback may be slow, manifesting as a delay in data return.."
         },
         "dubbing": {
@@ -477,7 +477,7 @@ if defaulelang != 'zh':
         "countdown_sec": "Countdown for single video translation pause",
         "backaudio_volume": "Background audio volume multiplier",
         "loop_backaudio": "Loop background audio",
-        "cuda_com_type": "CUDA compute type",
+        "cuda_com_type": "Compute data type",
         "beam_size": "Recognition accuracy (beam_size)",
         "best_of": "Recognition accuracy (best_of)",
         "condition_on_previous_text": "Enable context awareness",

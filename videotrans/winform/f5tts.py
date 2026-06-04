@@ -1,7 +1,8 @@
 
 
 def openwin():
-    from videotrans.configure.config import ROOT_DIR,tr,app_cfg, params,TEMP_DIR
+    from videotrans.configure.config import ROOT_DIR,tr,app_cfg, params
+    from videotrans.configure import config
     from pathlib import Path
 
     from PySide6 import QtWidgets
@@ -31,7 +32,6 @@ def openwin():
         params["indextts_url"] = winobj.indextts_url.text()
         params["sparktts_url"] = winobj.sparktts_url.text()
         params["f5tts_url"] = winobj.f5tts_url.text()
-        params["indextts_prompt"] = winobj.indextts_prompt.text()
         params.save()
         
         _rolename = next(reversed(tools.get_f5tts_role().values()))
@@ -45,7 +45,7 @@ def openwin():
         test_btn[tts_type].setText(tr('Testing...'))
         import time
         wk = ListenVoice(parent=winobj,
-                         queue_tts=[{"text": '你好啊我的朋友,希望你今天开心！', "role": rolename, "filename": TEMP_DIR + f"/{time.time()}-{tts_type}.wav", "tts_type": tts_type}],
+                         queue_tts=[{"text": '你好啊我的朋友,希望你今天开心！', "role": rolename, "filename": config.TEMP_DIR + f"/{time.time()}-{tts_type}.wav", "tts_type": tts_type}],
                          language="zh",
                          tts_type=tts_type)
         wk.uito.connect(feed)
@@ -62,7 +62,6 @@ def openwin():
         params["indextts_url"] = winobj.indextts_url.text()
         params["sparktts_url"] = winobj.sparktts_url.text()
         params["f5tts_url"] = winobj.f5tts_url.text()
-        params["indextts_prompt"] = winobj.indextts_prompt.text()
 
 
         params.save()
@@ -81,7 +80,6 @@ def openwin():
     winobj.indextts_url.setText(params.get('indextts_url',''))
     winobj.diatts_url.setText(params.get('diatts_url',''))
     winobj.voxcpmtts_url.setText(params.get('voxcpmtts_url',''))
-    winobj.indextts_prompt.setText(params.get('indextts_prompt',''))
 
     winobj.save.clicked.connect(save)
     winobj.f5tts_urltest.clicked.connect(lambda: test(tts.F5_TTS))

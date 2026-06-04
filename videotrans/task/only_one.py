@@ -11,7 +11,7 @@ from pydub import AudioSegment
 from videotrans.configure.config import tr, settings, app_cfg, logger
 from videotrans.task.taskcfg import TaskCfgVTT, SignMsg, InputFile
 from videotrans.task.trans_create import TransCreate
-from videotrans.util import tools
+from videotrans.util.tools import get_recogn_type,get_tanslate_type,get_tts_type,send_notification,vail_file
 
 
 class Worker(QThread):
@@ -52,7 +52,8 @@ class Worker(QThread):
 
             if float(settings.get('countdown_sec', 0)) > 0:
                 app_cfg.set_countdown(86400)
-                self._post(text='', type='edit_subtitle_source')
+                # 等待修改识别出的字幕
+                self._post(text=trk.cfg.source_sub, type='edit_subtitle_source')
                 self._post(tr('The subtitle editing interface is rendering'))
                 while app_cfg.task_countdown > 0:
                     time.sleep(1)
@@ -61,7 +62,7 @@ class Worker(QThread):
 
             if trk.should_trans:
                 app_cfg.onlyone_trans = True
-                if tools.vail_file(trk.cfg.target_sub):
+                if vail_file(trk.cfg.target_sub):
                     self._post(text="已存在翻译文件，跳过")
                 else:
                     trk.trans()
@@ -70,10 +71,11 @@ class Worker(QThread):
 
             # 需要配音时
             if trk.should_dubbing:
+
                 self._post(text=Path(trk.cfg.target_sub).read_text(encoding='utf-8'), type='replace_subtitle')
                 if float(settings.get('countdown_sec', 0)) > 0:
                     app_cfg.set_countdown(86400)
-                    # 传递过去临时目录，用于获取 speaker.json
+                    # 传递过去临时目录，用于获取 speaker.json，等待修改待配音的字幕
                     self._post(text=f'{trk.cfg.cache_folder}<|>{trk.cfg.target_language_code}<|>{trk.cfg.tts_type}', type="edit_subtitle_target")
                     self._post(tr('The subtitle editing interface is rendering'))
                     while app_cfg.task_countdown > 0:
@@ -88,7 +90,7 @@ class Worker(QThread):
                     for it in trk.queue_tts:
                         if self._exit(): return
                         # 当前配音时长,0=不存在配音文件
-                        it['dubbing_s'] = (len(AudioSegment.from_file(it['filename'])) if tools.vail_file(
+                        it['dubbing_s'] = (len(AudioSegment.from_file(it['filename'])) if vail_file(
                             it['filename']) else 0) / 1000.0
 
                     # 存入临时目录
@@ -96,6 +98,7 @@ class Worker(QThread):
                         json.dumps(trk.queue_tts, ensure_ascii=False), encoding='utf-8')
 
                     app_cfg.set_countdown(86400)
+                    # 等待修改配音结果或重新配音
                     self._post(text=f"{trk.cfg.cache_folder}<|>{trk.cfg.target_language_code}", type='edit_dubbing')
                     self._post(text=tr('The subtitle editing interface is rendering'))
                     while app_cfg.task_countdown > 0:
@@ -103,11 +106,23 @@ class Worker(QThread):
                         time.sleep(1)
                         app_cfg.set_countdown(app_cfg.task_countdown - 1)
 
+
+
             if not self._exit():
                 trk.align()
 
             if not self._exit():
                 trk.recogn2pass()
+            if trk.should_recogn2:
+                app_cfg.set_countdown(86400)
+                # 等待修改二次识别出的字幕
+                self._post(text=f'{trk.cfg.source_sub}', type="edit_recogn2_subtitle")
+                self._post(text=tr('The subtitle editing interface is rendering'))
+                while app_cfg.task_countdown > 0:
+                    if self._exit(): return
+                    time.sleep(1)
+                    app_cfg.set_countdown(app_cfg.task_countdown - 1)
+
 
             if not self._exit():
                 trk.assembling()
@@ -118,7 +133,8 @@ class Worker(QThread):
         except Exception as e:
             logger.exception(f'单视频模式翻译失败{e}',exc_info=True)
             detail_back = (traceback.format_exc()).strip()
-            self._post(text=str(e) + f"\n{detail_back}\n{trk.cfg if trk else ''}", type='error')
+            channel=f"{tr('shibiechucuo')}:{get_recogn_type(trk.cfg.recogn_type)}, {tr('fanyichucuo')}: {get_tanslate_type(trk.cfg.translate_type)}, {tr('peiyinchucuo')}:{get_tts_type(trk.cfg.tts_type)}"
+            self._post(text=str(e) + f"{channel}\n{detail_back}\n{trk.cfg if trk else ''}", type='error')
 
     def _post(self, text='', type='logs'):
         try:
