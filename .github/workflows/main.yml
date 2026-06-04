@@ -27,7 +27,7 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          uv run pyinstaller --noconfirm --clean --windowed --name "sp" --icon "videotrans/styles/icon.ico" --add-data "videotrans;videotrans" sp.py
+          uv run python -c "import sys; sys.setrecursionlimit(5000); from PyInstaller.__main__ import run; run(['--noconfirm', '--clean', '--windowed', '--name=sp', '--icon=videotrans/styles/icon.ico', '--add-data=videotrans;videotrans', 'sp.py'])"
 
       - name: Upload executable artifact
         uses: actions/upload-artifact@v4
